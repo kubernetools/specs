@@ -1,0 +1,55 @@
+name: Fetch Kubernetes OpenAPI Specs
+
+on:
+  workflow_dispatch:
+    inputs:
+      minor_version:
+        description: 'Kubernetes minor version to fetch (e.g. 1.33)'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fetch-specs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: spec-fetcher
+
+      - name: Build spec-fetcher
+        run: cargo build --release --manifest-path spec-fetcher/Cargo.toml
+
+      - name: Fetch specs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./spec-fetcher/target/release/spec-fetcher "${{ inputs.minor_version }}"
+
+      - name: Open PR with updated specs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add specs/
+          if git diff --cached --quiet; then
+            echo "No spec changes — skipping PR."
+            exit 0
+          fi
+          BRANCH="specs/update-v${{ inputs.minor_version }}-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+          git commit -m "chore: update OpenAPI specs for v${{ inputs.minor_version }}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore: update OpenAPI specs for v${{ inputs.minor_version }}" \
+            --body "Automated spec update triggered by \`workflow_dispatch\`." \
+            --base main \
+            --head "$BRANCH"
